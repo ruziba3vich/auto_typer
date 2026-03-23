@@ -1,0 +1,19 @@
+class Solution {
+    public int firstMissingPositive(int[] nums) {
+        HashSet<Integer> set = new HashSet<>();
+        int maxim = Integer.MIN_VALUE;
+        for (int num : nums) {
+            set.add(num);
+            maxim = Math.max(maxim, num);
+        }
+        if (maxim < 1) {
+            return 1;
+        }
+        for (int i = 1; i < maxim; i ++) {
+            if (! set.contains(i)) {
+                return i;
+            }
+        }
+        return maxim + 1;
+    }
+}
