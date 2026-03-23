@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"os"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -14,7 +15,35 @@ import (
 	"unsafe"
 )
 
-const defaultTypoRate = 0.07
+const (
+	defaultTypoRate = 0.07
+	defaultSpeed    = 1.0 // 1.0 = normal, 0.5 = twice as fast, 2.0 = twice as slow
+)
+
+func envFloat(key string, fallback float64) float64 {
+	if v := os.Getenv(key); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			return f
+		}
+	}
+	return fallback
+}
+
+func envDuration(key string, fallback time.Duration) time.Duration {
+	if v := os.Getenv(key); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			return d
+		}
+	}
+	return fallback
+}
+
+func envString(key string, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
 
 // ---- uinput constants ----
 
@@ -270,7 +299,7 @@ func randomNeighbor(r rune) (rune, bool) {
 
 // ---- typing simulation ----
 
-func typingDelay(r rune) time.Duration {
+func typingDelay(r rune, speed float64) time.Duration {
 	base := 20 + rand.IntN(25)
 
 	switch r {
@@ -285,7 +314,8 @@ func typingDelay(r rune) time.Duration {
 	}
 
 	jitter := rand.IntN(20) - 10
-	return time.Duration(base+jitter) * time.Millisecond
+	ms := float64(base+jitter) * speed
+	return time.Duration(ms) * time.Millisecond
 }
 
 // Auto-close pairs: when we type the opening char, editors insert the closing char.
@@ -297,7 +327,7 @@ var autoClosePairs = map[rune]rune{
 	'\'': '\'',
 }
 
-func typeText(kb *Keyboard, text string, typoRate float64) {
+func typeText(kb *Keyboard, text string, typoRate float64, speed float64) {
 	runes := []rune(text)
 	for i := 0; i < len(runes); i++ {
 		r := runes[i]
@@ -310,7 +340,7 @@ func typeText(kb *Keyboard, text string, typoRate float64) {
 			// Forward-delete the auto-inserted closing char.
 			kb.tap(111) // KEY_DELETE (forward-delete)
 			time.Sleep(5 * time.Millisecond)
-			time.Sleep(typingDelay(r))
+			time.Sleep(typingDelay(r, speed))
 			continue
 		}
 
@@ -344,7 +374,7 @@ func typeText(kb *Keyboard, text string, typoRate float64) {
 			// The next character we type will replace the selection.
 			// If nothing was selected, typing just inserts normally.
 
-			time.Sleep(typingDelay('\n'))
+			time.Sleep(typingDelay('\n', speed))
 
 			// Type the actual leading whitespace from the source.
 			// The first character typed replaces any selection.
@@ -358,7 +388,7 @@ func typeText(kb *Keyboard, text string, typoRate float64) {
 				// Next char is non-whitespace — type it to replace selection.
 				i++
 				kb.sendChar(runes[i])
-				time.Sleep(typingDelay(runes[i]))
+				time.Sleep(typingDelay(runes[i], speed))
 			}
 			// If next line is empty (\n\n), selection is empty, nothing to do.
 			continue
@@ -378,7 +408,7 @@ func typeText(kb *Keyboard, text string, typoRate float64) {
 			fmt.Fprintf(os.Stderr, "sendChar error at position %d: %v\n", i, err)
 		}
 
-		time.Sleep(typingDelay(r))
+		time.Sleep(typingDelay(r, speed))
 	}
 }
 
@@ -397,9 +427,10 @@ func countdown(d time.Duration) {
 }
 
 func main() {
-	fileFlag := flag.String("file", "/texts/main.txt", "Path to text file to type")
-	rateFlag := flag.Float64("rate", defaultTypoRate, "Typo rate (0.0 to 1.0)")
-	delayFlag := flag.Duration("delay", 2500*time.Millisecond, "Delay before typing starts")
+	fileFlag := flag.String("file", envString("FILE", "/texts/main.txt"), "Path to text file to type")
+	rateFlag := flag.Float64("rate", envFloat("TYPO_RATE", defaultTypoRate), "Typo rate (0.0 to 1.0)")
+	speedFlag := flag.Float64("speed", envFloat("TYPING_SPEED", defaultSpeed), "Typing speed multiplier (0.5=fast, 1.0=normal, 2.0=slow)")
+	delayFlag := flag.Duration("delay", envDuration("TYPING_DELAY", 2500*time.Millisecond), "Delay before typing starts")
 	flag.Parse()
 
 	kb, err := NewKeyboard()
@@ -459,7 +490,7 @@ func main() {
 
 		fmt.Fprintf(os.Stderr, "Will type %d characters. Switch to target window now!\n", len([]rune(text)))
 		countdown(*delayFlag)
-		typeText(kb, text, *rateFlag)
+		typeText(kb, text, *rateFlag, *speedFlag)
 		fmt.Fprintln(os.Stderr, "Done.")
 		fmt.Fprintln(os.Stderr)
 	}
