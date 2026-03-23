@@ -3,9 +3,6 @@ WORKDIR /app
 COPY go.mod main.go ./
 RUN go build -o /auto_typer .
 
-FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    wl-clipboard xclip \
-    && rm -rf /var/lib/apt/lists/*
+FROM alpine:3.21
 COPY --from=builder /auto_typer /usr/local/bin/auto_typer
 ENTRYPOINT ["auto_typer"]
