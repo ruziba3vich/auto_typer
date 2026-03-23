@@ -323,7 +323,7 @@ func countdown(d time.Duration) {
 }
 
 func main() {
-	fileFlag := flag.String("file", "", "Path to text file to type")
+	fileFlag := flag.String("file", "/texts/main.txt", "Path to text file to type")
 	rateFlag := flag.Float64("rate", defaultTypoRate, "Typo rate (0.0 to 1.0)")
 	delayFlag := flag.Duration("delay", 2500*time.Millisecond, "Delay before typing starts")
 	flag.Parse()
