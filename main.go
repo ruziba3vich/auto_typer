@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"os"
-	"os/exec"
 	"strings"
 	"syscall"
 	"time"
@@ -20,9 +19,9 @@ const defaultTypoRate = 0.07
 // ---- uinput constants ----
 
 const (
-	uiSetEvbit  = 0x40045564
-	uiSetKeybit = 0x40045565
-	uiDevCreate = 0x5501
+	uiSetEvbit   = 0x40045564
+	uiSetKeybit  = 0x40045565
+	uiDevCreate  = 0x5501
 	uiDevDestroy = 0x5502
 
 	evKey = 0x01
@@ -30,14 +29,11 @@ const (
 
 	synReport = 0
 
-	keyBackspace  = 14
-	keyTab        = 15
-	keyEnter      = 28
-	keyLeftShift  = 42
-	keySpace      = 57
-	keyHome       = 102
-	keyEnd        = 107
-	keyLeftCtrl   = 29
+	keyBackspace = 14
+	keyTab       = 15
+	keyEnter     = 28
+	keyLeftShift = 42
+	keySpace     = 57
 )
 
 // inputEvent matches the Linux struct input_event on amd64.
@@ -51,7 +47,7 @@ type inputEvent struct {
 // uinputUserDev matches struct uinput_user_dev (simplified for keyboard).
 type uinputUserDev struct {
 	Name      [80]byte
-	ID        [8]byte  // input_id: bustype, vendor, product, version (4x uint16)
+	ID        [8]byte // input_id: bustype, vendor, product, version (4x uint16)
 	FFEffects uint32
 	Absmax    [64]int32
 	Absmin    [64]int32
@@ -79,25 +75,21 @@ func NewKeyboard() (*Keyboard, error) {
 	}
 	fd := f.Fd()
 
-	// Enable EV_KEY and EV_SYN.
 	if err := ioctl(fd, uiSetEvbit, evKey); err != nil {
 		f.Close()
 		return nil, fmt.Errorf("UI_SET_EVBIT EV_KEY: %w", err)
 	}
 
-	// Enable all key codes we might need (0-255 covers full keyboard).
 	for i := uintptr(1); i <= 255; i++ {
 		ioctl(fd, uiSetKeybit, i)
 	}
 
-	// Write device info.
 	var dev uinputUserDev
 	copy(dev.Name[:], "auto_typer virtual keyboard")
-	// BUS_USB=3, arbitrary vendor/product
-	binary.LittleEndian.PutUint16(dev.ID[0:2], 3)    // bustype
-	binary.LittleEndian.PutUint16(dev.ID[2:4], 0x1234) // vendor
-	binary.LittleEndian.PutUint16(dev.ID[4:6], 0x5678) // product
-	binary.LittleEndian.PutUint16(dev.ID[6:8], 1)      // version
+	binary.LittleEndian.PutUint16(dev.ID[0:2], 3)
+	binary.LittleEndian.PutUint16(dev.ID[2:4], 0x1234)
+	binary.LittleEndian.PutUint16(dev.ID[4:6], 0x5678)
+	binary.LittleEndian.PutUint16(dev.ID[6:8], 1)
 
 	devBytes := (*[unsafe.Sizeof(dev)]byte)(unsafe.Pointer(&dev))[:]
 	if _, err := f.Write(devBytes); err != nil {
@@ -105,15 +97,12 @@ func NewKeyboard() (*Keyboard, error) {
 		return nil, fmt.Errorf("write uinput_user_dev: %w", err)
 	}
 
-	// Create the device.
 	if err := ioctl(fd, uiDevCreate, 0); err != nil {
 		f.Close()
 		return nil, fmt.Errorf("UI_DEV_CREATE: %w", err)
 	}
 
-	// Give the kernel a moment to register the device.
 	time.Sleep(200 * time.Millisecond)
-
 	return &Keyboard{f: f}, nil
 }
 
@@ -123,11 +112,7 @@ func (kb *Keyboard) Close() {
 }
 
 func (kb *Keyboard) emit(typ uint16, code uint16, value int32) error {
-	ev := inputEvent{
-		Type:  typ,
-		Code:  code,
-		Value: value,
-	}
+	ev := inputEvent{Type: typ, Code: code, Value: value}
 	buf := (*[unsafe.Sizeof(ev)]byte)(unsafe.Pointer(&ev))[:]
 	_, err := kb.f.Write(buf)
 	return err
@@ -138,7 +123,6 @@ func (kb *Keyboard) sync() error {
 }
 
 func (kb *Keyboard) tap(code uint16) error {
-	// Press, release, sync — all in one batch.
 	if err := kb.emit(evKey, code, 1); err != nil {
 		return err
 	}
@@ -148,13 +132,11 @@ func (kb *Keyboard) tap(code uint16) error {
 	if err := kb.sync(); err != nil {
 		return err
 	}
-	// Small settle time so the kernel processes the event.
 	time.Sleep(2 * time.Millisecond)
 	return nil
 }
 
 func (kb *Keyboard) shiftTap(code uint16) error {
-	// Shift down.
 	if err := kb.emit(evKey, keyLeftShift, 1); err != nil {
 		return err
 	}
@@ -163,7 +145,6 @@ func (kb *Keyboard) shiftTap(code uint16) error {
 	}
 	time.Sleep(5 * time.Millisecond)
 
-	// Key press + release.
 	if err := kb.emit(evKey, code, 1); err != nil {
 		return err
 	}
@@ -175,39 +156,7 @@ func (kb *Keyboard) shiftTap(code uint16) error {
 	}
 	time.Sleep(5 * time.Millisecond)
 
-	// Shift up.
 	if err := kb.emit(evKey, keyLeftShift, 0); err != nil {
-		return err
-	}
-	if err := kb.sync(); err != nil {
-		return err
-	}
-	// Extra settle time to prevent shift bleeding into next char.
-	time.Sleep(5 * time.Millisecond)
-	return nil
-}
-
-func (kb *Keyboard) ctrlTap(code uint16) error {
-	if err := kb.emit(evKey, keyLeftCtrl, 1); err != nil {
-		return err
-	}
-	if err := kb.sync(); err != nil {
-		return err
-	}
-	time.Sleep(5 * time.Millisecond)
-
-	if err := kb.emit(evKey, code, 1); err != nil {
-		return err
-	}
-	if err := kb.emit(evKey, code, 0); err != nil {
-		return err
-	}
-	if err := kb.sync(); err != nil {
-		return err
-	}
-	time.Sleep(5 * time.Millisecond)
-
-	if err := kb.emit(evKey, keyLeftCtrl, 0); err != nil {
 		return err
 	}
 	if err := kb.sync(); err != nil {
@@ -245,23 +194,19 @@ var shiftedKeys = map[rune]rune{
 }
 
 func (kb *Keyboard) sendChar(r rune) error {
-	// Uppercase letter.
 	if unicode.IsUpper(r) {
 		if code, ok := keycodes[unicode.ToLower(r)]; ok {
 			return kb.shiftTap(code)
 		}
 	}
-	// Direct keycode.
 	if code, ok := keycodes[r]; ok {
 		return kb.tap(code)
 	}
-	// Shifted symbol.
 	if base, ok := shiftedKeys[r]; ok {
 		if code, ok := keycodes[base]; ok {
 			return kb.shiftTap(code)
 		}
 	}
-	// Skip unmapped characters.
 	return nil
 }
 
@@ -344,34 +289,9 @@ func typingDelay(r rune) time.Duration {
 }
 
 func typeText(kb *Keyboard, text string, typoRate float64) {
-	runes := []rune(text)
-	for i := 0; i < len(runes); i++ {
-		r := runes[i]
-
-		// Handle newlines: type Enter, then undo any editor auto-indent/auto-close
-		// with Ctrl+Z, which reverts auto-actions while keeping the newline.
-		if r == '\n' {
-			kb.sendChar('\n')
-			time.Sleep(50 * time.Millisecond)
-
-			// Undo auto-indent/auto-close. Most editors treat auto-indent
-			// as a separate undo action from the newline itself.
-			kb.ctrlTap(44) // Ctrl+Z (KEY_Z=44)
-			time.Sleep(30 * time.Millisecond)
-
-			time.Sleep(typingDelay('\n'))
-
-			// Type the actual leading whitespace from the source.
-			for i+1 < len(runes) && (runes[i+1] == ' ' || runes[i+1] == '\t') {
-				i++
-				kb.sendChar(runes[i])
-				time.Sleep(2 * time.Millisecond)
-			}
-			continue
-		}
-
-		// Typo simulation.
-		if rand.Float64() < typoRate {
+	for i, r := range []rune(text) {
+		// Typo simulation (not on whitespace/newlines).
+		if r != '\n' && r != ' ' && r != '\t' && rand.Float64() < typoRate {
 			if wrong, ok := randomNeighbor(r); ok {
 				kb.sendChar(wrong)
 				time.Sleep(time.Duration(300+rand.IntN(300)) * time.Millisecond)
@@ -386,20 +306,6 @@ func typeText(kb *Keyboard, text string, typoRate float64) {
 
 		time.Sleep(typingDelay(r))
 	}
-}
-
-// ---- clipboard ----
-
-func getClipboard() (string, error) {
-	out, err := exec.Command("wl-paste", "--no-newline").Output()
-	if err == nil {
-		return string(out), nil
-	}
-	out, err = exec.Command("xclip", "-selection", "clipboard", "-o").Output()
-	if err == nil {
-		return string(out), nil
-	}
-	return "", fmt.Errorf("clipboard unavailable (tried wl-paste and xclip)")
 }
 
 // ---- main ----
@@ -417,6 +323,7 @@ func countdown(d time.Duration) {
 }
 
 func main() {
+	fileFlag := flag.String("file", "", "Path to text file to type")
 	rateFlag := flag.Float64("rate", defaultTypoRate, "Typo rate (0.0 to 1.0)")
 	delayFlag := flag.Duration("delay", 2500*time.Millisecond, "Delay before typing starts")
 	flag.Parse()
@@ -432,7 +339,10 @@ func main() {
 	scanner := bufio.NewScanner(os.Stdin)
 
 	fmt.Fprintln(os.Stderr, "auto_typer ready.")
-	fmt.Fprintln(os.Stderr, "Copy text to clipboard, then press Enter to type it out.")
+	if *fileFlag != "" {
+		fmt.Fprintf(os.Stderr, "File: %s\n", *fileFlag)
+	}
+	fmt.Fprintln(os.Stderr, "Press Enter to start typing (switch to target window within the delay).")
 	fmt.Fprintln(os.Stderr, "Type 'q' + Enter to quit.")
 	fmt.Fprintln(os.Stderr)
 
@@ -447,14 +357,29 @@ func main() {
 			break
 		}
 
-		text, err := getClipboard()
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "Could not read clipboard:", err)
+		var text string
+
+		// Allow changing file at runtime: type a path to use that file.
+		inputFile := *fileFlag
+		if line != "" {
+			inputFile = line
+		}
+
+		if inputFile != "" {
+			data, err := os.ReadFile(inputFile)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "Could not read file:", err)
+				continue
+			}
+			text = string(data)
+		} else {
+			fmt.Fprintln(os.Stderr, "No file specified. Pass -file flag or type a file path.")
 			continue
 		}
+
 		text = strings.TrimRight(text, "\n")
 		if text == "" {
-			fmt.Fprintln(os.Stderr, "Clipboard is empty, copy something first.")
+			fmt.Fprintln(os.Stderr, "File is empty.")
 			continue
 		}
 
