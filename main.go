@@ -35,6 +35,9 @@ const (
 	keyEnter      = 28
 	keyLeftShift  = 42
 	keySpace      = 57
+	keyHome       = 102
+	keyEnd        = 107
+	keyLeftCtrl   = 29
 )
 
 // inputEvent matches the Linux struct input_event on amd64.
@@ -184,6 +187,36 @@ func (kb *Keyboard) shiftTap(code uint16) error {
 	return nil
 }
 
+func (kb *Keyboard) ctrlTap(code uint16) error {
+	if err := kb.emit(evKey, keyLeftCtrl, 1); err != nil {
+		return err
+	}
+	if err := kb.sync(); err != nil {
+		return err
+	}
+	time.Sleep(5 * time.Millisecond)
+
+	if err := kb.emit(evKey, code, 1); err != nil {
+		return err
+	}
+	if err := kb.emit(evKey, code, 0); err != nil {
+		return err
+	}
+	if err := kb.sync(); err != nil {
+		return err
+	}
+	time.Sleep(5 * time.Millisecond)
+
+	if err := kb.emit(evKey, keyLeftCtrl, 0); err != nil {
+		return err
+	}
+	if err := kb.sync(); err != nil {
+		return err
+	}
+	time.Sleep(5 * time.Millisecond)
+	return nil
+}
+
 // ---- character to keycode mapping ----
 
 var keycodes = map[rune]uint16{
@@ -312,7 +345,32 @@ func typingDelay(r rune) time.Duration {
 
 func typeText(kb *Keyboard, text string, typoRate float64) {
 	runes := []rune(text)
-	for i, r := range runes {
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
+
+		// Handle newlines: type Enter, then undo any editor auto-indent/auto-close
+		// with Ctrl+Z, which reverts auto-actions while keeping the newline.
+		if r == '\n' {
+			kb.sendChar('\n')
+			time.Sleep(50 * time.Millisecond)
+
+			// Undo auto-indent/auto-close. Most editors treat auto-indent
+			// as a separate undo action from the newline itself.
+			kb.ctrlTap(44) // Ctrl+Z (KEY_Z=44)
+			time.Sleep(30 * time.Millisecond)
+
+			time.Sleep(typingDelay('\n'))
+
+			// Type the actual leading whitespace from the source.
+			for i+1 < len(runes) && (runes[i+1] == ' ' || runes[i+1] == '\t') {
+				i++
+				kb.sendChar(runes[i])
+				time.Sleep(2 * time.Millisecond)
+			}
+			continue
+		}
+
+		// Typo simulation.
 		if rand.Float64() < typoRate {
 			if wrong, ok := randomNeighbor(r); ok {
 				kb.sendChar(wrong)
