@@ -288,10 +288,84 @@ func typingDelay(r rune) time.Duration {
 	return time.Duration(base+jitter) * time.Millisecond
 }
 
+// Auto-close pairs: when we type the opening char, editors insert the closing char.
+var autoClosePairs = map[rune]rune{
+	'{': '}',
+	'[': ']',
+	'(': ')',
+	'"': '"',
+	'\'': '\'',
+}
+
 func typeText(kb *Keyboard, text string, typoRate float64) {
-	for i, r := range []rune(text) {
-		// Typo simulation (not on whitespace/newlines).
-		if r != '\n' && r != ' ' && r != '\t' && rand.Float64() < typoRate {
+	runes := []rune(text)
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
+
+		// Handle auto-close: after typing an opening bracket/quote,
+		// the editor inserts the closing char. Delete it immediately.
+		if _, isAutoClose := autoClosePairs[r]; isAutoClose {
+			kb.sendChar(r)
+			time.Sleep(10 * time.Millisecond)
+			// Forward-delete the auto-inserted closing char.
+			kb.tap(111) // KEY_DELETE (forward-delete)
+			time.Sleep(5 * time.Millisecond)
+			time.Sleep(typingDelay(r))
+			continue
+		}
+
+		// Handle newlines: type Enter, then clean up auto-indent.
+		// Strategy: Home → End → Shift+Home selects all auto-content on the line.
+		// Then typing the first real character replaces the selection.
+		// If editor added nothing, selection is empty and typing just works.
+		if r == '\n' {
+			kb.sendChar('\n')
+			time.Sleep(30 * time.Millisecond)
+
+			// Escape to dismiss any autocomplete popups.
+			kb.tap(1) // KEY_ESC
+			time.Sleep(10 * time.Millisecond)
+
+			// End (move past any auto-inserted content).
+			kb.tap(107) // KEY_END
+			time.Sleep(10 * time.Millisecond)
+
+			// Shift+Home to select everything back to col 0.
+			kb.emit(evKey, keyLeftShift, 1)
+			kb.sync()
+			time.Sleep(5 * time.Millisecond)
+			kb.tap(102) // KEY_HOME
+			time.Sleep(5 * time.Millisecond)
+			kb.emit(evKey, keyLeftShift, 0)
+			kb.sync()
+			time.Sleep(10 * time.Millisecond)
+
+			// Now any auto-indent/auto-close is selected.
+			// The next character we type will replace the selection.
+			// If nothing was selected, typing just inserts normally.
+
+			time.Sleep(typingDelay('\n'))
+
+			// Type the actual leading whitespace from the source.
+			// The first character typed replaces any selection.
+			if i+1 < len(runes) && (runes[i+1] == ' ' || runes[i+1] == '\t') {
+				for i+1 < len(runes) && (runes[i+1] == ' ' || runes[i+1] == '\t') {
+					i++
+					kb.sendChar(runes[i])
+					time.Sleep(2 * time.Millisecond)
+				}
+			} else if i+1 < len(runes) && runes[i+1] != '\n' {
+				// Next char is non-whitespace — type it to replace selection.
+				i++
+				kb.sendChar(runes[i])
+				time.Sleep(typingDelay(runes[i]))
+			}
+			// If next line is empty (\n\n), selection is empty, nothing to do.
+			continue
+		}
+
+		// Typo simulation (not on whitespace).
+		if r != ' ' && r != '\t' && rand.Float64() < typoRate {
 			if wrong, ok := randomNeighbor(r); ok {
 				kb.sendChar(wrong)
 				time.Sleep(time.Duration(300+rand.IntN(300)) * time.Millisecond)
