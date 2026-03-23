@@ -1,0 +1,15 @@
+services:
+  auto_typer:
+    build: .
+    stdin_open: true
+    tty: true
+    environment:
+      - DISPLAY=${DISPLAY}
+      - WAYLAND_DISPLAY=${WAYLAND_DISPLAY}
+      - XDG_RUNTIME_DIR=/run/user/1000
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix
+      - /run/user/1000:/run/user/1000
+    devices:
+      - /dev/uinput:/dev/uinput
+    privileged: true
